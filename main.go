@@ -121,6 +121,7 @@ func (l *LoadBalancer) Stop(ctx context.Context) error {
 
 // }
 
+// refer RFC 7230 for why these need to be removed
 var hopHeaders = map[string]struct{}{
 	"Connection":          {},
 	"Proxy-Connection":    {},
