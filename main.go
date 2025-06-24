@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
+
+	logger "github.com/nn-advith/loadbalancer/utils/logger"
 )
 
 type RoundRobin struct {
@@ -76,8 +77,8 @@ func (l *LoadBalancer) Initialise(port string, jsonpath string) error {
 }
 
 func (l *LoadBalancer) Start() error {
-	log.Println("starting loadbalancer ...")
-	log.Println("started loadbalancer on ", l.Server.Addr)
+	logger.L.Println("starting loadbalancer ...")
+	logger.L.Println("started loadbalancer on ", l.Server.Addr)
 	if err := l.Server.ListenAndServe(); err != http.ErrServerClosed {
 		return err
 	}
@@ -85,11 +86,11 @@ func (l *LoadBalancer) Start() error {
 }
 
 func (l *LoadBalancer) Stop(ctx context.Context) error {
-	log.Println("stropping loadbalancer")
+	logger.L.Println("stropping loadbalancer")
 	if err := l.Server.Shutdown(ctx); err != nil {
 		return err
 	}
-	log.Println("loadbalancer taken care of.")
+	logger.L.Println("loadbalancer taken care of.")
 	return nil
 }
 
@@ -148,7 +149,7 @@ func (l *LoadBalancer) Lbhandler(w http.ResponseWriter, r *http.Request) {
 
 	request, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
 	if err != nil {
-		log.Println("failed to create request")
+		logger.L.Println("failed to create request")
 		w.WriteHeader(http.StatusInternalServerError)
 	}
 	for k, v := range r.Header {
@@ -163,7 +164,7 @@ func (l *LoadBalancer) Lbhandler(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := l.Client.Do(request)
 	if err != nil {
-		log.Println("error during request execution : ", err)
+		logger.L.Println("error during request execution : ", err)
 	}
 
 	for k, v := range resp.Header {
@@ -178,15 +179,21 @@ func (l *LoadBalancer) Lbhandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 
-	var lb LoadBalancer
-	err := lb.Initialise("4242", "somerandompath")
+	err := logger.InitLogger(true, true, func() *string { s := "/home/normalbeans/Programming/golang/loadbalancer/dummy/logfile.log"; return &s }())
 	if err != nil {
-		log.Fatalf("error during initialisation : %v", err)
+		fmt.Println("error initialising logger: ", err)
+		os.Exit(1)
+	}
+
+	var lb LoadBalancer
+	err = lb.Initialise("4242", "somerandompath")
+	if err != nil {
+		logger.L.Fatalf("error during initialisation : %v", err)
 	}
 
 	go func() {
 		if err := lb.Start(); err != nil {
-			log.Fatalf("error during startup : %v", err)
+			logger.L.Fatalf("error during startup : %v", err)
 		}
 	}()
 
@@ -198,6 +205,6 @@ func main() {
 	defer cancel()
 
 	if err := lb.Stop(ctx); err != nil {
-		log.Fatalf("error during shutdown : %v", err)
+		logger.L.Fatalf("error during shutdown : %v", err)
 	}
 }
