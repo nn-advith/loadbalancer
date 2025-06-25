@@ -41,10 +41,9 @@ func (r *RoundRobin) Next() string {
 type LoadBalancer struct {
 	BackendsJSON string
 	Backends     []string
-	// Algo string
-	Server   *http.Server
-	Client   *http.Client
-	Strategy *RoundRobin
+	Server       *http.Server
+	Client       *http.Client
+	Strategy     *RoundRobin
 }
 
 func (l *LoadBalancer) Initialise(port string, jsonpath string) error {
@@ -179,7 +178,7 @@ func (l *LoadBalancer) Lbhandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 
-	err := logger.InitLogger(true, true, func() *string { s := "/home/normalbeans/Programming/golang/loadbalancer/dummy/logfile.log"; return &s }())
+	err := logger.InitLogger(true, true)
 	if err != nil {
 		fmt.Println("error initialising logger: ", err)
 		os.Exit(1)
