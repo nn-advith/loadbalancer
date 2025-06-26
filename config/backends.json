@@ -1,0 +1,19 @@
+{
+    "backends": [
+        {
+            "address": "localhost",
+            "port": "3000",
+            "weight": 0.5
+        },
+        {
+            "address": "localhost",
+            "port": "4000",
+            "weight": 0.3
+        },
+        {
+            "address": "localhost",
+            "port": "5000",
+            "weight": 0.2
+        }
+    ]
+}
