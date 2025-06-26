@@ -2,57 +2,86 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+
+	consts "github.com/nn-advith/loadbalancer/consts"
+	strategy "github.com/nn-advith/loadbalancer/strategy"
 	logger "github.com/nn-advith/loadbalancer/utils/logger"
 )
 
-type RoundRobin struct {
-	backends []string
-	index    int
-	lock     sync.Mutex
-}
-
-func (r *RoundRobin) Initialise(backends []string) error {
-	if len(backends) == 0 {
-		return fmt.Errorf("empty backends list")
-	}
-	r.backends = backends
-	r.index = 0
-	r.lock = sync.Mutex{}
-	return nil
-}
-
-func (r *RoundRobin) Next() string {
-	r.lock.Lock()
-	backend := r.backends[r.index]
-	r.index = (r.index + 1) % len(r.backends)
-	r.lock.Unlock()
-	return backend
-}
-
 type LoadBalancer struct {
-	BackendsJSON string
-	Backends     []string
-	Server       *http.Server
-	Client       *http.Client
-	Strategy     *RoundRobin
+	Server   *http.Server
+	Client   *http.Client
+	Strategy strategy.Strategy
+}
+
+func GetStrategy() (strategy.Strategy, error) {
+	strategyval := os.Getenv("NBLB_STRATEGY")
+	if _, exists := strategy.StrategyMap[strategyval]; !exists {
+		return nil, fmt.Errorf("unknown loadbalancing strategy: %v", strategyval)
+	} else {
+		return strategy.StrategyMap[strategyval], nil
+	}
+}
+
+func ParseBackendJSON() ([]string, error) {
+
+	var parsedBackends struct { //anonymous struct
+		Backends []struct {
+			Address string `json:"address"`
+			Port    string `json:"port"`
+		} `json:"backends"`
+	}
+
+	backendjsonpath := os.Getenv("NBLB_JSONPATH")
+	if backendjsonpath == "" {
+		return nil, fmt.Errorf("env NBLB_JSONPATH is not set")
+	}
+
+	if _, err := os.Stat(backendjsonpath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("backend json config not found: %v", err)
+	}
+	data, err := os.ReadFile(backendjsonpath)
+	if err != nil {
+		return nil, fmt.Errorf("unable to read json config : %v", err)
+	}
+
+	if err := json.Unmarshal(data, &parsedBackends); err != nil {
+		return nil, fmt.Errorf("error during unmarshalling json config: %v", err)
+	}
+
+	backendslist := make([]string, 0, len(parsedBackends.Backends))
+	if len(parsedBackends.Backends) == 0 {
+		return nil, fmt.Errorf("no backends defined")
+	}
+	for i := range parsedBackends.Backends {
+		backendslist = append(backendslist, fmt.Sprintf("%s:%s", parsedBackends.Backends[i].Address, parsedBackends.Backends[i].Port))
+	}
+
+	return backendslist, err
 }
 
 func (l *LoadBalancer) Initialise(port string, jsonpath string) error {
 	//read and parse the json path into backends
+	// check if the json directory is present and whether the file is accessible.
+	// if yes, try decode. if no values present; throw error
 
 	handler := http.NewServeMux()
 	handler.HandleFunc("/", l.Lbhandler)
 
-	BACKENDS := []string{"localhost:3000", "localhost:4000"} // to be parsed from json
+	BACKENDS, err := ParseBackendJSON()
+	if err != nil {
+		return err
+	}
 
 	l.Server = &http.Server{
 		Addr:         ":" + port,
@@ -66,8 +95,12 @@ func (l *LoadBalancer) Initialise(port string, jsonpath string) error {
 		Timeout: 10 * time.Second,
 	}
 
-	l.Strategy = &RoundRobin{}
-	err := l.Strategy.Initialise(BACKENDS)
+	lbstrategy, err := GetStrategy()
+	if err != nil {
+		return err
+	}
+	l.Strategy = lbstrategy
+	err = l.Strategy.Initialise(BACKENDS)
 	if err != nil {
 		return err
 	}
@@ -121,19 +154,6 @@ func (l *LoadBalancer) Stop(ctx context.Context) error {
 
 // }
 
-// refer RFC 7230 for why these need to be removed
-var hopHeaders = map[string]struct{}{
-	"Connection":          {},
-	"Proxy-Connection":    {},
-	"Keep-Alive":          {},
-	"Proxy-Authenticate":  {},
-	"Proxy-Authorization": {},
-	"TE":                  {},
-	"Trailer":             {},
-	"Transfer-Encoding":   {},
-	"Upgrade":             {},
-}
-
 func (l *LoadBalancer) Lbhandler(w http.ResponseWriter, r *http.Request) {
 	// loadbalancer is essentially a reverse proxy
 	// determine the scheme to be used ( http or https )
@@ -142,7 +162,7 @@ func (l *LoadBalancer) Lbhandler(w http.ResponseWriter, r *http.Request) {
 	// copy the headers except those that should not be copied as per RFC7230
 	// copy request body
 
-	scheme := "http://"
+	scheme := os.Getenv("NBLB_SCHEME")
 	targethost := l.Strategy.Next()
 	targetURL := scheme + targethost + r.URL.RequestURI()
 
@@ -152,7 +172,7 @@ func (l *LoadBalancer) Lbhandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}
 	for k, v := range r.Header {
-		if _, exists := hopHeaders[k]; exists {
+		if _, exists := consts.HopHeaders[k]; exists {
 			continue
 		} else {
 			for _, j := range v {
@@ -176,6 +196,19 @@ func (l *LoadBalancer) Lbhandler(w http.ResponseWriter, r *http.Request) {
 
 }
 
+func CheckEnvironment() error {
+	missing := make([]string, 0, len(consts.RequiredEnvParameters))
+	for k := range consts.RequiredEnvParameters {
+		if os.Getenv(k) == "" {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) != 0 {
+		return fmt.Errorf("required env parameters missing/not set: %v", missing)
+	}
+	return nil
+}
+
 func main() {
 
 	err := logger.InitLogger(true, true)
@@ -184,8 +217,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	_ = godotenv.Load()
+	err = CheckEnvironment()
+	if err != nil {
+		logger.L.Fatalf("env check failed :%v", err)
+	}
+
 	var lb LoadBalancer
-	err = lb.Initialise("4242", "somerandompath")
+	err = lb.Initialise(os.Getenv("NBLB_PORT"), os.Getenv("NBLB_JSONPATH"))
 	if err != nil {
 		logger.L.Fatalf("error during initialisation : %v", err)
 	}
