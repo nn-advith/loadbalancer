@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 	consts "github.com/nn-advith/loadbalancer/consts"
 	strategy "github.com/nn-advith/loadbalancer/strategy"
 	logger "github.com/nn-advith/loadbalancer/utils/logger"
+	parser "github.com/nn-advith/loadbalancer/utils/parser"
 )
 
 type LoadBalancer struct {
@@ -33,43 +33,6 @@ func GetStrategy() (strategy.Strategy, error) {
 	}
 }
 
-func ParseBackendJSON() ([]string, error) {
-
-	var parsedBackends struct { //anonymous struct
-		Backends []struct {
-			Address string `json:"address"`
-			Port    string `json:"port"`
-		} `json:"backends"`
-	}
-
-	backendjsonpath := os.Getenv("NBLB_JSONPATH")
-	if backendjsonpath == "" {
-		return nil, fmt.Errorf("env NBLB_JSONPATH is not set")
-	}
-
-	if _, err := os.Stat(backendjsonpath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("backend json config not found: %v", err)
-	}
-	data, err := os.ReadFile(backendjsonpath)
-	if err != nil {
-		return nil, fmt.Errorf("unable to read json config : %v", err)
-	}
-
-	if err := json.Unmarshal(data, &parsedBackends); err != nil {
-		return nil, fmt.Errorf("error during unmarshalling json config: %v", err)
-	}
-
-	backendslist := make([]string, 0, len(parsedBackends.Backends))
-	if len(parsedBackends.Backends) == 0 {
-		return nil, fmt.Errorf("no backends defined")
-	}
-	for i := range parsedBackends.Backends {
-		backendslist = append(backendslist, fmt.Sprintf("%s:%s", parsedBackends.Backends[i].Address, parsedBackends.Backends[i].Port))
-	}
-
-	return backendslist, err
-}
-
 func (l *LoadBalancer) Initialise(port string, jsonpath string) error {
 	//read and parse the json path into backends
 	// check if the json directory is present and whether the file is accessible.
@@ -78,7 +41,7 @@ func (l *LoadBalancer) Initialise(port string, jsonpath string) error {
 	handler := http.NewServeMux()
 	handler.HandleFunc("/", l.Lbhandler)
 
-	BACKENDS, err := ParseBackendJSON()
+	BACKENDS, err := parser.ParseBackendJSON()
 	if err != nil {
 		return err
 	}
